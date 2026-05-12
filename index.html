@@ -546,7 +546,7 @@ svg.stsvg{position:absolute;inset:0;width:100%;height:100%;display:block;overflo
         <div class="sec">
           <div class="sec-t bio">
             <div class="sec-t-inner">&#x1F9A0; Google Actualités — Hantavirus</div>
-            <span class="src-badge" id="gnews-rss-badge">CHARGEMENT</span>
+            <span class="src-badge" id="hanta-news-badge">CHARGEMENT</span>
           </div>
           <div id="hanta-static">
             <div class="nitem bio-news" onclick="window.open('https://legrandcontinent.eu/fr/2026/05/07/hantavirus-epidemie/','_blank')">
@@ -565,11 +565,30 @@ svg.stsvg{position:absolute;inset:0;width:100%;height:100%;display:block;overflo
               <div class="nmeta"><span class="ntag b">HANTA</span><span class="ntag c">FRANCE</span></div>
             </div>
           </div>
-          <div id="hanta-gnews-feed">
-            <div class="nload">Chargement Google Actualités...</div>
+          <div id="hanta-guardian-feed">
+            <div class="nload">Connexion The Guardian...</div>
           </div>
-          <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:6px;text-align:right">
-            Source : <span style="color:var(--cyan)">news.google.com</span> · Filtre : hantavirus
+          <!-- Bouton Google News direct (pas de proxy, ouvre dans onglet) -->
+          <div style="margin-top:8px;display:flex;gap:6px;align-items:center">
+            <a href="https://news.google.com/search?q=hantavirus&hl=fr&gl=FR&ceid=FR:fr"
+               target="_blank" rel="noopener"
+               style="flex:1;display:block;text-align:center;padding:6px;
+                      font-family:var(--mono);font-size:9px;letter-spacing:1px;
+                      border:1px solid rgba(255,107,53,0.4);color:var(--bio);
+                      background:rgba(255,107,53,0.05);text-decoration:none;
+                      text-transform:uppercase">
+              🔍 Ouvrir Google News Hantavirus ↗
+            </a>
+            <a href="https://news.google.com/search?q=hantavirus&hl=en&gl=US&ceid=US:en"
+               target="_blank" rel="noopener"
+               style="padding:6px 10px;font-family:var(--mono);font-size:9px;
+                      border:1px solid rgba(255,107,53,0.3);color:var(--text-dim);
+                      background:transparent;text-decoration:none;text-transform:uppercase">
+              EN
+            </a>
+          </div>
+          <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:5px;text-align:right">
+            Live : <span style="color:var(--cyan)">The Guardian API</span> · Filtre : hantavirus
           </div>
         </div>
 
@@ -716,7 +735,7 @@ function popup(title,content,col){
 function loadAllData(){
   const n=new Date();
   document.getElementById('last-sync').textContent=String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0');
-  loadUSGS();loadOpenSky();loadRTE();loadGuardian();loadNASA();loadGoogleNewsHanta();
+  loadUSGS();loadOpenSky();loadRTE();loadGuardian();loadNASA();loadGoogleNewsHanta();loadWorkerFeeds();
 
 }
 
@@ -828,6 +847,53 @@ async function loadRTE(){
 }
 
 /* The Guardian — CORS ouvert, clé "test" ok pour usage léger */
+async function loadWorkerFeeds(){
+  // Flux FR généraux via Cloudflare Worker
+  const WORKER = 'https://super-wildflower-b16e.totryt03.workers.dev';
+  const FR_FEEDS = [
+    {key: 'bfm-actu',   src: 'BFM TV'},
+    {key: 'franceinfo', src: 'FRANCE INFO'},
+    {key: 'lemonde',    src: 'LE MONDE'},
+    {key: 'figaro',     src: 'LE FIGARO'},
+  ];
+  const articles = [];
+  for(const f of FR_FEEDS){
+    try{
+      const r = await fetch(WORKER + '/?feed=' + f.key, {signal: AbortSignal.timeout(8000)});
+      if(!r.ok) continue;
+      const xml = await r.text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(xml, 'text/xml');
+      const items = doc.querySelectorAll('item');
+      items.forEach(item => {
+        const title = item.querySelector('title')?.textContent || '';
+        const link  = item.querySelector('link')?.textContent || '#';
+        const date  = item.querySelector('pubDate')?.textContent || '';
+        articles.push({title, link, date, src: f.src});
+      });
+      onlineFeeds++;
+    }catch(e){ console.warn(f.src, e.message); }
+  }
+  articles.sort((a,b) => new Date(b.date) - new Date(a.date));
+  const feed = document.getElementById('news-fr-worker');
+  if(feed && articles.length){
+    feed.innerHTML = articles.slice(0,10).map(art => {
+      const ago = timeSince(new Date(art.date).getTime());
+      const title = (art.title||'').slice(0,88);
+      const safeLink = (art.link||'#').replace(/'/g,'%27');
+      const isHanta = /hantavirus|hanta/i.test(title);
+      return [
+        '<div class="nitem' + (isHanta?' bio-news':'') + '" onclick="window.open(\'' + safeLink + '\',\'_blank\')">',
+        '<div class="nsrc' + (isHanta?' bio':'') + '">' + art.src + ' &middot; ' + ago + '</div>',
+        '<div class="ntitle">' + title + '</div>',
+        '<div class="nmeta"><span class="ntag ' + (isHanta?'b':'c') + '">' + (isHanta?'HANTA':'FR') + '</span></div>',
+        '</div>'
+      ].join('');
+    }).join('');
+    updateCount();
+  }
+}
+
 async function loadGuardian(){
   try{
     const url='https://content.guardianapis.com/search?q=france+OR+world&order-by=newest&page-size=8&api-key=test';
@@ -880,112 +946,74 @@ async function loadNASA(){
   }catch(e){console.warn('NASA EONET:',e.message)}
 }
 
-/* Google News RSS — Hantavirus (3 flux, 2 proxies en fallback) */
+/* Hantavirus News — Cloudflare Worker proxy (Le Monde + BFM + Nouvel Obs filtrés) */
 async function loadGoogleNewsHanta(){
-  const badge = document.getElementById('gnews-rss-badge');
+  const badge = document.getElementById('hanta-news-badge');
+  const feed = document.getElementById('hanta-guardian-feed');
   
-  // 3 requêtes Google News : FR, EN, toutes langues
-  const GNEWS_URLS = [
-    'https://news.google.com/rss/search?q=hantavirus&hl=fr&gl=FR&ceid=FR:fr',
-    'https://news.google.com/rss/search?q=hantavirus+MV+Hondius&hl=en&gl=US&ceid=US:en',
-    'https://news.google.com/rss/search?q=hantavirus+OMS+OR+WHO&hl=fr&gl=FR&ceid=FR:fr',
-  ];
+  const WORKER = 'https://super-wildflower-b16e.totryt03.workers.dev';
   
-  // Proxies — rss2json fonctionne depuis GitHub Pages (CORS ok)
-  const PROXIES = [
-    u => `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(u)}&count=15`,
-    u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+  // 3 sources hantavirus via le Worker
+  const HANTA_FEEDS = [
+    {key: 'lemonde-hanta', src: 'LE MONDE'},
+    {key: 'bfm-sante',     src: 'BFM SANTÉ'},
+    {key: 'nouvelobs-sante',src: 'NOUVEL OBS'},
   ];
 
-  const seen = new Set();
   const articles = [];
-
-  for(const gnUrl of GNEWS_URLS){
-    for(const proxyFn of PROXIES){
-      try{
-        const proxyUrl = proxyFn(gnUrl);
-        const r = await fetch(proxyUrl, {signal: AbortSignal.timeout(8000)});
-        if(!r.ok) continue;
-        const text = await r.text();
-        
-        // rss2json retourne du JSON
-        if(text.trim().startsWith('{')){
-          const json = JSON.parse(text);
-          if(json.status !== 'ok' || !json.items) continue;
-          json.items.forEach(item => {
-            const key = item.title;
-            if(seen.has(key)) return;
-            seen.add(key);
-            articles.push({
-              title: item.title || '',
-              link: item.link || '#',
-              source: item.author || extractSource(item.title),
-              date: item.pubDate,
-              lang: gnUrl.includes('hl=fr') ? 'fr' : 'en'
-            });
-          });
-          break; // proxy ok, pas besoin du suivant
-        }
-        
-        // allorigins/corsproxy retournent du XML
-        const parser = new DOMParser();
-        const xml = parser.parseFromString(text, 'text/xml');
-        const items = xml.querySelectorAll('item');
-        if(!items.length) continue;
-        items.forEach(item => {
-          const title = item.querySelector('title')?.textContent || '';
-          if(seen.has(title)) return;
-          seen.add(title);
-          const source = item.querySelector('source')?.textContent || extractSource(title);
-          articles.push({
-            title,
-            link: item.querySelector('link')?.textContent || '#',
-            source,
-            date: item.querySelector('pubDate')?.textContent || '',
-            lang: gnUrl.includes('hl=fr') ? 'fr' : 'en'
-          });
-        });
-        break; // proxy ok
-        
-      }catch(e){ continue; }
+  
+  for(const f of HANTA_FEEDS){
+    try{
+      const r = await fetch(WORKER + '/?feed=' + f.key, {signal: AbortSignal.timeout(8000)});
+      if(!r.ok) continue;
+      const xml = await r.text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(xml, 'text/xml');
+      const items = doc.querySelectorAll('item');
+      items.forEach(item => {
+        const title = item.querySelector('title')?.textContent || '';
+        const link  = item.querySelector('link')?.textContent || '#';
+        const date  = item.querySelector('pubDate')?.textContent || '';
+        // Filtre hantavirus sur BFM et Nouvel Obs (Le Monde a déjà un flux dédié)
+        const isHanta = f.key === 'lemonde-hanta' || 
+                        /hantavirus|hanta/i.test(title);
+        if(!isHanta) return;
+        articles.push({title, link, date, src: f.src});
+      });
+      onlineFeeds++;
+    }catch(e){
+      console.warn(f.src + ':', e.message);
     }
   }
 
-  const feed = document.getElementById('hanta-gnews-feed');
-  
+  // Tri par date
+  articles.sort((a,b) => new Date(b.date) - new Date(a.date));
+
   if(!articles.length){
-    feed.innerHTML = '<div class="nload" style="color:var(--text-dim)">Flux Google News indisponible — articles de référence affichés ci-dessus</div>';
     badge.textContent = 'HORS LIGNE';
     badge.className = 'src-badge err';
+    feed.innerHTML = '<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);padding:6px 0">' +
+      'Flux indisponible — utilise le bouton Google News ci-dessous</div>';
     return;
   }
-
-  // Tri par date (plus récent en premier)
-  articles.sort((a,b) => new Date(b.date) - new Date(a.date));
 
   badge.textContent = articles.length + ' articles';
   badge.className = 'src-badge live';
 
-  feed.innerHTM= articles.slice(0, 20).map(art => {
-    const langTag = art.lang === 'fr' ? 'FR' : 'EN';
-    const langColor = art.lang === 'fr' ? 'c' : 'g';
+  feed.innerHTML = articles.slice(0, 20).map(art => {
     const ago = timeSince(new Date(art.date).getTime());
-    const title = (art.title || '').replace(/ - [^-]+$/, '').slice(0, 95);
-    const src = (art.source || 'Google News').toUpperCase().slice(0, 25);
+    const title = (art.title || '').slice(0, 92);
     const safeLink = (art.link || '#').replace(/'/g, '%27');
     return [
       '<div class="nitem bio-news" onclick="window.open(\'' + safeLink + '\',\'_blank\')">',
-      '<div class="nsrc bio">&#x1F9A0; ' + src + ' &middot; ' + ago + '</div>',
+      '<div class="nsrc bio">' + art.src + ' &middot; ' + ago + '</div>',
       '<div class="ntitle">' + title + '</div>',
-      '<div class="nmeta"><span class="ntag b">HANTA</span>',
-      '<span class="ntag ' + langColor + '">' + langTag + '</span></div>',
+      '<div class="nmeta"><span class="ntag b">HANTA</span><span class="ntag c">FR</span></div>',
       '</div>'
     ].join('');
-  }).join('')
+  }).join('');
 
-  // Mise à jour ticker avec les vrais titres
-  buildHantaTicker(articles.slice(0, 10));
-  onlineFeeds++;
+  buildHantaTicker(articles);
   updateCount();
 }
 
